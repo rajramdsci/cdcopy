@@ -1,0 +1,804 @@
+*&---------------------------------------------------------------------*
+*& Report  /XYZ/SD_DOWNLOAD_COND_REC
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+
+REPORT  /XYZ/sd_download_cond_rec.
+
+"INCLUDE /XYZ/sd_download_cond_rec_top.
+"BEGIN
+TABLES: konp, vbak, knvv, komg, mara, a501.
+
+TYPE-POOLS: vrm, slis, truxs.
+
+TYPES:
+  BEGIN OF gty_datbi_list,
+    sign TYPE c LENGTH 1,
+    option TYPE c LENGTH 2,
+    low TYPE a501-datbi,
+    high TYPE a501-datbi,
+  END OF gty_datbi_list,
+
+
+  BEGIN OF gty_datab_list,
+    sign TYPE c LENGTH 1,
+    option TYPE c LENGTH 2,
+    low TYPE a501-datab,
+    high TYPE a501-datab,
+  END OF gty_datab_list,
+
+  BEGIN OF gty_knumh_list,
+    sign TYPE c LENGTH 1,
+    option TYPE c LENGTH 2,
+    low TYPE a501-knumh,
+    high TYPE a501-knumh,
+  END OF gty_knumh_list,
+
+  BEGIN OF gty_konp_sel,
+    knumh TYPE konp-knumh,
+    kschl TYPE konp-kschl,
+  END OF gty_konp_sel,
+
+  BEGIN OF gty_compiled_data,
+    kschl TYPE konp-kschl,
+    stfkz TYPE konp-stfkz,
+    kzbzg TYPE konp-kzbzg,
+    kstbm TYPE konm-kstbm,
+    kbetr_konm TYPE konm-kbetr,
+    konws TYPE konp-konws,
+    kbetr_konp TYPE konp-kbetr,
+    konwa TYPE konp-konwa,
+    kpein TYPE konp-kpein,
+    kmein TYPE konp-kmein,
+    loevm_ko TYPE konp-loevm_ko,
+  END OF gty_compiled_data.
+
+DATA: gt_fieldnames TYPE TABLE OF fieldname,
+      gf_continue TYPE char1 VALUE 'X',
+      gt_compiled_data TYPE TABLE OF gty_compiled_data WITH HEADER LINE.
+
+FIELD-SYMBOLS: <gs_konm> TYPE konm,
+               <gs_konp> TYPE konp.
+"END
+"INCLUDE /XYZ/sd_download_cond_rec_top.
+
+"INCLUDE /XYZ/sd_download_cond_rec_scr.
+"BEGIN
+SELECTION-SCREEN BEGIN OF BLOCK sblock1 WITH FRAME TITLE text-000.
+SELECT-OPTIONS: so_kschl FOR konp-kschl NO INTERVALS OBLIGATORY.
+PARAMETERS: pa_list(45) TYPE c AS LISTBOX VISIBLE LENGTH 60 OBLIGATORY.
+SELECTION-SCREEN END OF BLOCK sblock1.
+
+SELECTION-SCREEN BEGIN OF BLOCK sblock2 WITH FRAME TITLE text-001.
+SELECT-OPTIONS: so_vkorg FOR vbak-vkorg,
+                so_pltyp FOR knvv-pltyp,
+                so_kdgrp FOR knvv-kdgrp,
+                so_kunnr FOR knvv-kunnr,
+                so_kokun FOR komg-zzkokun,
+                so_matnr FOR mara-matnr,
+                so_waerk FOR komg-waerk,
+                so_datbi FOR a501-datbi.
+SELECTION-SCREEN END OF BLOCK sblock2.
+
+SELECTION-SCREEN BEGIN OF BLOCK sblock3 WITH FRAME TITLE text-002.
+SELECTION-SCREEN COMMENT 1(79) text-003.
+PARAMETERS: pa_allfr AS CHECKBOX,
+            pa_allto AS CHECKBOX.
+SELECTION-SCREEN SKIP 1.
+PARAMETERS: pa_alldl AS CHECKBOX,
+            pa_alltd AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK sblock3.
+
+SELECTION-SCREEN BEGIN OF BLOCK sblock4 WITH FRAME TITLE text-004.
+PARAMETERS: pa_disp RADIOBUTTON GROUP rgp1 DEFAULT 'X' USER-COMMAND rgp1_chg,
+            pa_file RADIOBUTTON GROUP rgp1.
+SELECTION-SCREEN BEGIN OF BLOCK sblock5 WITH FRAME TITLE text-005.
+PARAMETERS: pa_path(1024) TYPE c MODIF ID pth,
+            pa_dispt AS CHECKBOX MODIF ID pth.
+SELECTION-SCREEN END OF BLOCK sblock5.
+SELECTION-SCREEN END OF BLOCK sblock4.
+
+AT SELECTION-SCREEN OUTPUT.
+  " enable/disable options
+  PERFORM ss_update_enabled.
+
+AT SELECTION-SCREEN ON END OF so_kschl.
+  " update condition access
+  PERFORM ss_update_pa_list.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR pa_path.
+  PERFORM file_browse CHANGING pa_path.
+
+
+*&---------------------------------------------------------------------*
+*&      Form  ss_set_defaults
+*&---------------------------------------------------------------------*
+*       Set selection screen defaults
+*       (Directly access selection screen varaibles)
+*----------------------------------------------------------------------*
+FORM ss_set_defaults.
+  so_kschl-low = 'ZP01'.
+  so_kschl-high = space.
+  so_kschl-sign = 'I'.
+  so_kschl-option = 'EQ'.
+  APPEND so_kschl.
+
+  so_kschl-low = 'ZP02'.
+  so_kschl-high = space.
+  so_kschl-sign = 'I'.
+  so_kschl-option = 'EQ'.
+  APPEND so_kschl.
+
+  so_kschl-low = 'ZP04'.
+  so_kschl-high = space.
+  so_kschl-sign = 'I'.
+  so_kschl-option = 'EQ'.
+  APPEND so_kschl.
+
+  so_kschl-low = 'ZP05'.
+  so_kschl-high = space.
+  so_kschl-sign = 'I'.
+  so_kschl-option = 'EQ'.
+  APPEND so_kschl.
+
+  " ===== ===== =====
+  " ===== DEBUG =====
+  IF sy-uname = 'STOLLCRI'.
+    so_pltyp-low = '00'.
+    so_pltyp-high = space.
+    so_pltyp-sign = 'I'.
+    so_pltyp-option = 'GT'.
+    APPEND so_pltyp.
+
+    so_matnr-low = '000000000'.
+    so_matnr-high = space.
+    so_matnr-sign = 'I'.
+    so_matnr-option = 'GT'.
+    APPEND so_matnr.
+  ENDIF.
+ENDFORM.                    "ss_default_so_kschl
+
+*&---------------------------------------------------------------------*
+*&      Form  ss_update_pa_list
+*&---------------------------------------------------------------------*
+*       Update pa_list based upon KSCHL selection
+*       (Directly access selection screen varaibles)
+*----------------------------------------------------------------------*
+FORM ss_update_pa_list.
+  TYPES:
+    BEGIN OF ty_kschl_list,
+      sign TYPE c LENGTH 1,
+      option TYPE c LENGTH 2,
+      low TYPE konp-kschl,
+      high TYPE konp-kschl,
+    END OF ty_kschl_list.
+
+  DATA: lf_kschl TYPE ty_kschl_list,
+        lt_kozgf TYPE TABLE OF t685-kozgf,
+        lf_kozgf TYPE t685-kozgf,
+        lt_kotabnr TYPE TABLE OF t682i-kotabnr,
+        lf_kotabnr TYPE t682i-kotabnr,
+        lf_gstru TYPE tmc1t-gstru,
+        lt_tmc1t TYPE TABLE OF tmc1t,
+        ls_tmc1t TYPE tmc1t,
+        ls_list TYPE vrm_value,
+        lt_list TYPE vrm_values.
+
+  " for each condition type
+  LOOP AT so_kschl INTO lf_kschl.
+    SELECT kozgf
+      FROM t685
+      INTO TABLE lt_kozgf
+      WHERE kvewe = 'A'
+        AND kappl = 'V'
+        AND kschl = lf_kschl-low.
+
+    " for each access sequence
+    LOOP AT lt_kozgf INTO lf_kozgf.
+      SELECT kotabnr
+        FROM t682i
+        INTO TABLE lt_kotabnr
+        WHERE kvewe = 'A'
+          AND kappl = 'V'
+          AND kozgf = lf_kozgf.
+
+      " for each condition table
+      LOOP AT lt_kotabnr INTO lf_kotabnr.
+        CONCATENATE 'A' lf_kotabnr INTO lf_gstru.
+
+        SELECT *
+          FROM tmc1t
+          INTO TABLE lt_tmc1t
+          WHERE spras = sy-langu
+            AND gstru = lf_gstru.
+
+        " for each description
+        LOOP AT lt_tmc1t INTO ls_tmc1t.
+          ls_list-key = ls_tmc1t-gstru.
+          ls_list-text = ls_tmc1t-gstxt.
+          APPEND ls_list TO lt_list.
+        ENDLOOP.
+      ENDLOOP.
+    ENDLOOP.
+  ENDLOOP.
+
+  SORT lt_list BY key.
+  DELETE ADJACENT DUPLICATES FROM lt_list COMPARING key.
+
+  " update selection screen
+  CALL FUNCTION 'VRM_SET_VALUES'
+    EXPORTING
+      id              = 'pa_list'
+      values          = lt_list
+    EXCEPTIONS
+      id_illegal_name = 1
+      OTHERS          = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    "ss_update_pa_list
+
+*&---------------------------------------------------------------------*
+*&      Form  ss_update_enabled
+*&---------------------------------------------------------------------*
+*       Updates enabled/disabled status of selection screen items
+*       (Directly access selection screen varaibles)
+*----------------------------------------------------------------------*
+FORM ss_update_enabled.
+  LOOP AT SCREEN.
+    IF screen-group1 = 'PTH'.
+      IF pa_file = 'X'.
+        screen-input = 1.
+      ELSE.
+        screen-input = 0.
+      ENDIF.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    "ss_update_enabled
+"END
+"INCLUDE /XYZ/sd_download_cond_rec_scr.
+
+"INCLUDE /XYZ/sd_download_cond_rec_alv.
+"BEGIN
+*&---------------------------------------------------------------------*
+*&      Form  alv_fill_fieldcat
+*&---------------------------------------------------------------------*
+*       Fill in the ALV field catalog
+*----------------------------------------------------------------------*
+*      -->P_FIELDCAT The field catalog to append to
+*      -->P_FIELD    The field to add
+*      -->P_TABNAME  The table name for the field
+*      -->P_REPTEXT  The field text
+*      -->P_SELTEXT  The column text
+*----------------------------------------------------------------------*
+FORM alv_fill_fieldcat
+  TABLES p_fieldcat
+   USING p_field p_tabname p_reptext p_seltext.
+
+  DATA: ls_fieldcat TYPE slis_fieldcat_alv.
+
+  CLEAR ls_fieldcat.
+
+  ls_fieldcat-fieldname = p_field.
+  IF p_seltext IS INITIAL.
+    ls_fieldcat-ref_tabname = p_tabname.
+    ls_fieldcat-reptext_ddic = p_reptext.
+  ELSE.
+    ls_fieldcat-seltext_m = p_seltext.
+  ENDIF.
+  ls_fieldcat-no_zero = 'X'.
+
+  APPEND ls_fieldcat TO p_fieldcat.
+ENDFORM.                    "alv_fill_fieldcat
+
+*&---------------------------------------------------------------------*
+*&      Form  user_command_alv
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_COMPILED_DATA   text
+*      -->P_UCOMM           text
+*      -->P_SELFIELD        text
+*----------------------------------------------------------------------*
+FORM user_command_alv
+  TABLES p_compiled_data
+   USING p_ucomm TYPE sy-ucomm
+         p_selfield TYPE slis_selfield.
+
+  READ TABLE p_compiled_data INDEX p_selfield-tabindex.
+
+  IF sy-ucomm = 'RECH'.
+  ENDIF.
+
+  IF sy-ucomm = 'ZURU'.
+    SET SCREEN 0.
+  ENDIF.
+
+  IF sy-ucomm = 'ENDE'
+  OR sy-ucomm = 'CANC'.
+    LEAVE PROGRAM.
+  ENDIF.
+ENDFORM.                    "user_command_alv
+
+*&---------------------------------------------------------------------*
+*&      Form  alv
+*&---------------------------------------------------------------------*
+*       Generate the ALV display
+*----------------------------------------------------------------------*
+*      -->P_COMPILED_DATA  text
+*----------------------------------------------------------------------*
+FORM alv TABLES p_compiled_data.
+
+  DATA: lf_repid LIKE sy-repid,
+        ls_print TYPE slis_print_alv,
+        lt_fieldcat TYPE slis_t_fieldcat_alv.
+
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KSCHL' 'KONP' 'KSCHL' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'STFKZ' 'KONP' 'STFKZ' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KZBZG' 'KONP' 'KZBZG' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KSTBM' 'KONM' 'KSTBM' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KBETR_KONM' 'KONM' 'KBETR' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KONWS' 'KONP' 'KONWS' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KBETR_KONP' 'KONP' 'KBETR' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KONWA' 'KONP' 'KONWA' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KPEIN' 'KONP' 'KPEIN' ''.
+  PERFORM alv_fill_fieldcat
+    TABLES lt_fieldcat USING 'KMEIN' 'KONP' 'KMEIN' ''.
+  PERFORM alv_fill_fieldcat  
+    TABLES lt_fieldcat USING 'LOEVM_KO' 'KONP' 'LOEVM_KO' ''.
+
+  lf_repid = sy-repid.
+
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+      i_callback_program      = lf_repid
+      it_fieldcat             = lt_fieldcat
+      i_save                  = 'X'
+      is_print                = ls_print
+    TABLES
+      t_outtab                = p_compiled_data
+    EXCEPTIONS
+      program_error           = 1
+      OTHERS                  = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    "alv
+"END
+"INCLUDE /XYZ/sd_download_cond_rec_alv.
+
+"INCLUDE /XYZ/sd_cond_recs_frm.
+"BEGIN
+*&---------------------------------------------------------------------*
+*&      Form  file_browse
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_PATH     text
+*----------------------------------------------------------------------*
+FORM file_browse
+  CHANGING p_path TYPE file_table-filename.
+
+  CALL FUNCTION '/XYZ/BROWSE_LOCAL_FILE_SYST'
+    EXPORTING
+      iv_window_title     = text-008
+      iv_default_filename = '*.csv'
+      iv_file_filter      = '*.csv'
+      iv_multiselection   = ' '
+    CHANGING
+      iv_path             = p_path.
+ENDFORM.                    "file_browse
+
+*&---------------------------------------------------------------------*
+*&      Form  file_download
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->PT_TAB     text
+*      -->P_FILENAME text
+*----------------------------------------------------------------------*
+FORM file_download
+  TABLES pt_tab
+  USING p_filename.
+
+  DATA: lf_filename TYPE string,
+        lt_csv TYPE truxs_t_text_data.
+
+  FIELD-SYMBOLS: <ls_csv> TYPE LINE OF truxs_t_text_data.
+
+  IF LINES( pt_tab ) > 0.
+    lf_filename = p_filename.
+
+    CALL FUNCTION 'SAP_CONVERT_TO_CSV_FORMAT'
+      EXPORTING
+        i_field_seperator    = ','
+      TABLES
+        i_tab_sap_data       = pt_tab
+      CHANGING
+        i_tab_converted_data = lt_csv
+      EXCEPTIONS
+        conversion_failed    = 1
+        OTHERS               = 2.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    " It seems that the above function is broken
+    " So this is a work around until I can make my own
+    LOOP AT lt_csv ASSIGNING <ls_csv>.
+      REPLACE ALL OCCURRENCES OF ';' IN <ls_csv> WITH ','.
+    ENDLOOP.
+
+    CALL FUNCTION 'GUI_DOWNLOAD'
+      EXPORTING
+        filename                = lf_filename
+      TABLES
+        data_tab                = lt_csv
+      EXCEPTIONS
+        file_write_error        = 1
+        no_batch                = 2
+        gui_refuse_filetransfer = 3
+        invalid_type            = 4
+        no_authority            = 5
+        unknown_error           = 6
+        header_not_allowed      = 7
+        separator_not_allowed   = 8
+        filesize_not_allowed    = 9
+        header_too_long         = 10
+        dp_error_create         = 11
+        dp_error_send           = 12
+        dp_error_write          = 13
+        unknown_dp_error        = 14
+        access_denied           = 15
+        dp_out_of_memory        = 16
+        disk_full               = 17
+        dp_timeout              = 18
+        file_not_found          = 19
+        dataprovider_exception  = 20
+        control_flush_error     = 21
+        OTHERS                  = 22.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    "file_download
+
+*&---------------------------------------------------------------------*
+*&      Form  get_condition_fields
+*&---------------------------------------------------------------------*
+*       Return required fields for given condition
+*----------------------------------------------------------------------*
+*      -->P_FIELDNAMES  text
+*      -->P_CONDITION   text
+*----------------------------------------------------------------------*
+FORM get_condition_fields
+  TABLES p_fieldnames
+  USING p_condition.
+
+  DATA: lt_fieldnames TYPE TABLE OF fieldname,
+        lf_fieldname TYPE fieldname.
+
+  " get all field names for condition table
+  SELECT fieldname
+    FROM dd03l
+    INTO TABLE lt_fieldnames
+    WHERE tabname = p_condition
+      AND keyflag = 'X'.
+
+  " filter out fields that are not required
+  LOOP AT lt_fieldnames INTO lf_fieldname.
+    IF lf_fieldname <> 'MANDT'
+      AND lf_fieldname <> 'KAPPL'
+      AND lf_fieldname <> 'KFRST'
+      AND lf_fieldname <> 'DATBI'
+      AND lf_fieldname <> 'DATAB'
+      AND lf_fieldname <> 'KBSTAT'
+      AND lf_fieldname <> 'KNUMH'.
+
+      IF lf_fieldname(2) <> 'ZZ'.
+        APPEND lf_fieldname TO p_fieldnames.
+      ELSE.
+        IF lf_fieldname = 'ZZKOKUN'.
+          lf_fieldname = 'KOKUN'.
+          APPEND lf_fieldname TO p_fieldnames.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+  SORT p_fieldnames.
+  DELETE ADJACENT DUPLICATES FROM p_fieldnames.
+ENDFORM.                    "get_fields
+
+*&---------------------------------------------------------------------*
+*&      Form  check_condition_criteria
+*&---------------------------------------------------------------------*
+*       Check that fields required for a condition type are filled in
+*----------------------------------------------------------------------*
+*      -->P_FIELDNAMES  The list of fields
+*      -->P_CONDITION   The condition we are using
+*      -->P_CONTINUE    Boolean value blank if one is missing
+*----------------------------------------------------------------------*
+FORM check_condition_criteria
+  TABLES p_fieldnames
+  USING p_condition
+  CHANGING p_continue TYPE char1.
+
+  DATA: lf_fieldname TYPE fieldname,
+        lf_selectoption_name TYPE char32,
+        lf_last_missing TYPE fieldname,
+        lf_message TYPE string,
+        lf_rollname TYPE dd03l-rollname,
+        lf_scrtext_s TYPE dd04t-scrtext_s,
+        lf_scrtext_m  TYPE dd04t-scrtext_m,
+        lf_scrtext_l  TYPE dd04t-scrtext_l.
+
+  FIELD-SYMBOLS: <fs_selectoption_name>.
+
+  " check if all required fields are filled
+  LOOP AT p_fieldnames INTO lf_fieldname.
+    CONCATENATE 'so_' lf_fieldname INTO lf_selectoption_name.
+    ASSIGN (lf_selectoption_name) TO <fs_selectoption_name>.
+
+    IF <fs_selectoption_name> IS ASSIGNED.
+      IF <fs_selectoption_name> IS INITIAL.
+        lf_last_missing = lf_fieldname.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+  " something is missing
+  IF lf_last_missing IS NOT INITIAL.
+    p_continue = ' '.
+
+    " get field rollname
+    " (incomplete select single critera, but is non critical)
+    SELECT SINGLE rollname
+      FROM dd03l
+      INTO lf_rollname
+      WHERE tabname = p_condition
+        AND fieldname = lf_last_missing.
+
+    " get rollname text value
+    " (incomplete select single critera, but is non critical)
+    SELECT SINGLE scrtext_s scrtext_m scrtext_l
+      FROM dd04t
+      INTO (lf_scrtext_s, lf_scrtext_m, lf_scrtext_l)
+      WHERE rollname = lf_rollname
+        AND ddlanguage = sy-langu.
+
+    " build user infor text
+    IF lf_scrtext_l IS NOT INITIAL.
+      CONCATENATE text-005 lf_scrtext_l INTO lf_message SEPARATED BY space.
+    ELSE.
+      CONCATENATE text-005 lf_last_missing INTO lf_message SEPARATED BY space.
+    ENDIF.
+
+    " tell the user what is missing
+    MESSAGE lf_message TYPE 'I'.
+  ENDIF.
+ENDFORM.                    "check_condition_criteria
+
+*&---------------------------------------------------------------------*
+*&      Form  get_date_sels
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_DATBI      text
+*      -->P_DATAB      text
+*      -->P_DATBI_SEL  text
+*      -->P_DATAB_SEL  text
+*----------------------------------------------------------------------*
+FORM get_date_sels TABLES p_datbi p_datab p_datbi_sel p_datab_sel.
+  DATA: ls_datbi_sel TYPE gty_datbi_list,
+        ls_datab_sel TYPE gty_datab_list.
+
+  " 'only currently valid records' is checked
+  IF pa_alltd = 'X'.
+    ls_datbi_sel-sign = 'I'.
+    ls_datbi_sel-option = 'LT'.
+    ls_datbi_sel-low = sy-datum.
+    ls_datbi_sel-high = space.
+    APPEND ls_datbi_sel TO p_datbi_sel.
+
+    ls_datab_sel-sign = 'I'.
+    ls_datab_sel-option = 'GT'.
+    ls_datab_sel-low = sy-datum.
+    ls_datab_sel-high = space.
+    APPEND ls_datab_sel TO p_datab_sel.
+  ELSE.
+    " 'at start of validity period' is checked
+    IF pa_allfr = 'X'.
+      LOOP AT p_datbi INTO ls_datbi_sel.
+        APPEND ls_datbi_sel TO p_datbi_sel.
+      ENDLOOP.
+    ENDIF.
+    " 'at end of validity period' is checked
+    IF pa_allto = 'X'.
+      LOOP AT p_datab INTO ls_datab_sel.
+        APPEND ls_datab_sel TO p_datab_sel.
+      ENDLOOP.
+    ENDIF.
+  ENDIF.
+ENDFORM.                    "get_date_sels
+
+*&---------------------------------------------------------------------*
+*&      Form  get_data_a501
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_KSCHL    text
+*      -->P_PLTYP    text
+*      -->P_MATNR    text
+*      -->P_DATBI    text
+*      -->P_KAPPL    text
+*----------------------------------------------------------------------*
+FORM get_data_a501
+  TABLES p_kschl p_pltyp p_matnr p_datbi p_datab p_compiled_data
+  USING p_kappl.
+
+  DATA: lt_a501 TYPE TABLE OF a501 WITH HEADER LINE,
+        lf_a501 TYPE a501,
+        lt_datbi_sel TYPE TABLE OF gty_datbi_list,
+        lt_datab_sel TYPE TABLE OF gty_datab_list,
+        ls_knumh TYPE gty_knumh_list,
+        lt_knumh TYPE TABLE OF gty_knumh_list,
+        ls_knumh_sel TYPE gty_knumh_list,
+        lt_knumh_sel TYPE TABLE OF gty_knumh_list,
+
+        lt_konm TYPE TABLE OF konm,
+        lt_konp TYPE TABLE OF konp,
+        ls_konp_sel TYPE gty_konp_sel,
+        lt_konp_sel TYPE TABLE OF gty_konp_sel,
+        ls_compiled_data TYPE gty_compiled_data.
+
+  FIELD-SYMBOLS: <ls_a501> TYPE a501.
+
+  PERFORM get_date_sels TABLES p_datbi p_datab lt_datbi_sel lt_datab_sel.
+
+*  data: lf_show_dels TYPE konp-LOEVM_KO,
+*  PERFORM get_dels_flag CHANGING lf_LOEVM_KO_sel.
+*  form get_dels_flag CHANGING p_LOEVM_KO_sel.
+*    IF pa_alldl = 'X'.
+*      p_LOEVM_KO_sel = ' '
+*    ENDIF.
+*  endform.
+
+  SELECT *
+    FROM a501
+    INTO TABLE lt_a501
+    WHERE kappl = p_kappl
+      AND kschl IN p_kschl
+      AND pltyp IN p_pltyp
+      AND matnr IN p_matnr
+      AND datbi IN lt_datbi_sel
+      AND datab IN lt_datab_sel.
+
+  LOOP AT lt_a501 INTO lf_a501.
+    ls_knumh_sel-low = lf_a501-knumh.
+    ls_knumh_sel-high = space.
+    ls_knumh_sel-sign = 'I'.
+    ls_knumh_sel-option = 'EQ'.
+    APPEND ls_knumh_sel TO lt_knumh_sel.
+
+    ls_konp_sel-knumh = lf_a501-knumh.
+    ls_konp_sel-kschl = lf_a501-kschl.
+    APPEND ls_konp_sel TO lt_konp_sel.
+  ENDLOOP.
+
+  SORT lt_knumh BY low.
+  DELETE ADJACENT DUPLICATES FROM lt_knumh COMPARING low.
+  SELECT knumh kstbm kbetr
+    FROM konm
+    INTO CORRESPONDING FIELDS OF TABLE lt_knumh
+   WHERE knumh IN lt_knumh_sel.
+
+  SORT lt_konp_sel.
+  DELETE ADJACENT DUPLICATES FROM lt_konp_sel.
+  SELECT knumh kschl stfkz konwa kpein kmein loevm_ko
+    FROM konp
+    INTO CORRESPONDING FIELDS OF TABLE lt_konp
+     FOR ALL ENTRIES IN lt_konp_sel
+   WHERE knumh EQ lt_konp_sel-knumh
+     AND kschl EQ lt_konp_sel-kschl.
+
+  LOOP AT lt_konm ASSIGNING <gs_konm>.
+    " save relevant data from lt_konm to compiled data
+    ls_compiled_data-kstbm = <gs_konm>-kstbm.
+    ls_compiled_data-kbetr_konm = <gs_konm>-kbetr.
+
+    " save relevant data from lt_a501 to compiled data
+    READ TABLE lt_a501 ASSIGNING <ls_a501>
+    BINARY SEARCH WITH KEY knumh = <gs_konm>-knumh.
+    IF sy-subrc EQ 0.
+      ls_compiled_data-kschl = <ls_a501>-kschl.
+    ENDIF.
+
+    " save relevant data from lt_konp to compiled data
+    READ TABLE lt_konp ASSIGNING <gs_konp>
+    BINARY SEARCH WITH KEY knumh = <gs_konm>-knumh.
+    IF sy-subrc EQ 0.
+      ls_compiled_data-stfkz = <gs_konp>-stfkz.
+      ls_compiled_data-kzbzg = <gs_konp>-kzbzg.
+      ls_compiled_data-konws = <gs_konp>-konws.
+      ls_compiled_data-kbetr_konp = <gs_konp>-kbetr.
+      ls_compiled_data-konwa = <gs_konp>-konwa.
+      ls_compiled_data-kpein = <gs_konp>-kpein.
+      ls_compiled_data-kmein = <gs_konp>-kmein.
+      ls_compiled_data-loevm_ko = <gs_konp>-loevm_ko.
+    ENDIF.
+
+    APPEND ls_compiled_data TO p_compiled_data.
+    CLEAR: ls_compiled_data.
+  ENDLOOP.
+ENDFORM.                    "get_data_a501
+"END
+"INCLUDE /XYZ/sd_cond_recs_frm.
+
+
+
+INITIALIZATION.
+  " set default condition types
+  PERFORM ss_set_defaults.
+  " set default condition access
+  PERFORM ss_update_pa_list.
+  " enable/disable options
+  PERFORM ss_update_enabled.
+
+
+START-OF-SELECTION.
+  " get required fields for current condition
+  PERFORM get_condition_fields
+   TABLES gt_fieldnames USING pa_list.
+
+  " check that all fields required for current condition are filled
+  PERFORM check_condition_criteria
+   TABLES gt_fieldnames USING pa_list CHANGING gf_continue.
+
+  " gather data
+  IF gf_continue = 'X'.
+    IF pa_list = 'A501'.
+      PERFORM get_data_a501
+       TABLES so_kschl so_pltyp so_matnr so_datbi so_datbi gt_compiled_data
+        USING 'V'.
+    ELSEIF pa_list = 'A502'.
+      MESSAGE 'Not impelemented' TYPE 'I'.
+    ELSEIF pa_list = 'A534'.
+      MESSAGE 'Not impelemented' TYPE 'I'.
+    ELSEIF pa_list = 'A543'.
+      MESSAGE 'Not impelemented' TYPE 'I'.
+    ELSEIF pa_list = 'A578'.
+      MESSAGE 'Not impelemented' TYPE 'I'.
+    ELSE.
+      MESSAGE text-006 TYPE 'I'.
+    ENDIF.
+
+    " download file
+    IF pa_file = 'X'.
+      IF pa_path IS INITIAL.
+        MESSAGE text-007 TYPE 'I'.
+      ELSE.
+        PERFORM file_download TABLES gt_compiled_data USING pa_path.
+      ENDIF.
+    ENDIF.
+
+    " display results
+    IF pa_disp = 'X' OR pa_dispt = 'X'.
+      PERFORM alv TABLES gt_compiled_data.
+    ENDIF.
+  ENDIF.
